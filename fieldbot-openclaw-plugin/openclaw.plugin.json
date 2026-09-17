@@ -1,0 +1,106 @@
+{
+  "id": "fieldbot-openclaw",
+  "name": "Fieldbot OpenClaw",
+  "description": "Guarded Odoo ticket operations for the Fieldbot Telegram agent.",
+  "version": "1.0.0",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "userMap"
+    ],
+    "properties": {
+      "pythonExecutable": {
+        "type": "string",
+        "description": "Python 3 executable. Defaults to python3."
+      },
+      "stateDir": {
+        "type": "string",
+        "description": "Persistent Fieldbot state directory.",
+        "default": "~/.openclaw/fieldbot"
+      },
+      "timezone": {
+        "type": "string",
+        "default": "America/New_York"
+      },
+      "userMap": {
+        "type": "object",
+        "patternProperties": {
+          "^.*$": {
+            "type": "string"
+          }
+        },
+        "description": "Telegram numeric user ID to Odoo login mapping."
+      },
+      "technicianAliases": {
+        "type": "object",
+        "patternProperties": {
+          "^.*$": {
+            "type": "string"
+          }
+        },
+        "description": "Declared nicknames mapped to a technician's Odoo login, e.g. {\"matt\": \"matthew@pos.com\"}. Matching is exact and case-insensitive; names are never matched by prefix or substring."
+      },
+      "legacyCutoff": {
+        "type": "string",
+        "default": "2025-12-01"
+      },
+      "ignoredProjects": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "autoArchiveTitles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "maxPhotoBytes": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 20000000
+      },
+      "maxAudioBytes": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 25000000
+      },
+      "bridgeTimeoutSeconds": {
+        "type": "integer",
+        "minimum": 5,
+        "default": 90
+      }
+    },
+    "additionalProperties": false
+  },
+  "contracts": {
+    "tools": [
+      "fieldbot_list_tickets",
+      "fieldbot_ticket_details",
+      "fieldbot_search_tickets",
+      "fieldbot_customer_info",
+      "fieldbot_search_knowledge",
+      "fieldbot_read_article",
+      "fieldbot_claim_ticket",
+      "fieldbot_close_ticket",
+      "fieldbot_log_update",
+      "fieldbot_reassign_ticket",
+      "fieldbot_schedule_ticket",
+      "fieldbot_set_stage",
+      "fieldbot_create_ticket",
+      "fieldbot_create_subtask",
+      "fieldbot_activity",
+      "fieldbot_amend_last_time",
+      "fieldbot_attach_photo",
+      "fieldbot_schedule_event",
+      "fieldbot_transcribe_voice",
+      "fieldbot_sweep",
+      "fieldbot_poll_new_tickets",
+      "fieldbot_report"
+    ]
+  }
+}

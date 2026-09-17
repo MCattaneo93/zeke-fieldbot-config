@@ -1,0 +1,42 @@
+{
+  "name": "fieldbot-openclaw-plugin",
+  "version": "1.0.0",
+  "description": "Guarded Odoo tools for the Fieldbot OpenClaw Telegram agent",
+  "type": "module",
+  "files": [
+    "dist",
+    "python/*.py",
+    "requirements-voice.txt",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:python": "python3 -m unittest discover -s python/tests -v",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "typebox": "1.1.39"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.1-2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.7.1-2",
+      "minGatewayVersion": "2026.7.1-2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.1-2",
+      "pluginSdkVersion": "2026.7.1-2"
+    }
+  }
+}
