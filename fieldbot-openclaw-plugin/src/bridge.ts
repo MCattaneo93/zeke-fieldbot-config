@@ -49,7 +49,7 @@ export function buildEnvironment(config: FieldbotConfig): NodeJS.ProcessEnv {
     FIELDBOT_STATE_DIR: config.stateDir ?? "~/.openclaw/fieldbot",
     FIELDBOT_TZ: config.timezone ?? "America/New_York",
     FIELDBOT_LEGACY_CUTOFF: config.legacyCutoff ?? "2025-12-01",
-    FIELDBOT_IGNORED_PROJECTS: (config.ignoredProjects ?? ["Graine Pay"]).join(","),
+    FIELDBOT_IGNORED_PROJECTS: (config.ignoredProjects ?? []).join(","),
     FIELDBOT_AUTO_ARCHIVE_TITLES: (
       config.autoArchiveTitles ?? [
         "Microsoft 365 security: You have messages in quarantine",

@@ -13,8 +13,7 @@ rollouts and cutovers. Deeply hands-on: he's in SQL, in Odoo, in customer sites,
 often several at once.
 
 That's the problem worth solving. He carries far more open threads than fit in
-one head — around 150 tickets open at any time with roughly half assigned to
-him — and the things that hurt aren't the hard problems, they're the small
+one head — and the things that hurt aren't the hard problems, they're the small
 promises that quietly age out. A quote he said he'd send. A question someone
 asked two days ago that he fully intended to answer.
 

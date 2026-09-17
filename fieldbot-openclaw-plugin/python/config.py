@@ -63,7 +63,7 @@ TZNAME = os.environ.get("FIELDBOT_TZ", "America/New_York")
 LEGACY_CUTOFF = os.environ.get("FIELDBOT_LEGACY_CUTOFF", "2025-12-01").strip()
 IGNORED_PROJECTS = [
     value.strip().lower()
-    for value in os.environ.get("FIELDBOT_IGNORED_PROJECTS", "Graine Pay").split(",")
+    for value in os.environ.get("FIELDBOT_IGNORED_PROJECTS", "").split(",")
     if value.strip()
 ]
 AUTO_ARCHIVE_TITLES = [

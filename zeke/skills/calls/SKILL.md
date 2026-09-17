@@ -30,7 +30,7 @@ without the audio:
 YYYY-MM-DD_HHMM__<counterparty-slug>__<messageId-short>.<ext>
 ```
 
-e.g. `2026-08-13_1257__tony-merlo-poscom-mai__a91f2c.wav`
+e.g. `2026-08-13_1257__jane-doe-poscom-mai__a91f2c.wav`
 
 Record nothing else. Do not summarise the email body into a note — the
 transcript is the record, and it doesn't exist yet.
