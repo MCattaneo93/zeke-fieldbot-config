@@ -100,7 +100,9 @@
       "fieldbot_transcribe_voice",
       "fieldbot_sweep",
       "fieldbot_poll_new_tickets",
-      "fieldbot_report"
+      "fieldbot_report",
+      "fieldbot_delivery_reconcile",
+      "fieldbot_delivery_fill_serials"
     ]
   }
 }

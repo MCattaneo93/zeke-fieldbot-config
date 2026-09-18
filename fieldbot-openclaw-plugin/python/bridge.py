@@ -16,6 +16,7 @@ from typing import Any
 
 import actions
 import config
+import deliveries
 import ics_util
 import reports
 import state
@@ -412,6 +413,60 @@ def validated_audio_path(raw_path: str, workspace_dir: str | None) -> Path:
     return path
 
 
+def validated_text_path(raw_path: str, workspace_dir: str | None) -> Path:
+    if not workspace_dir:
+        raise PermissionError("No trusted workspace was supplied for the list file")
+    workspace = Path(workspace_dir).expanduser().resolve()
+    path = Path(raw_path).expanduser().resolve()
+    try:
+        path.relative_to(workspace)
+    except ValueError as exc:
+        raise PermissionError("The store list file must be inside the active workspace") from exc
+    if not path.is_file():
+        raise FileNotFoundError(f"Store list file not found: {path.name}")
+    max_bytes = int(os.environ.get("FIELDBOT_MAX_TEXT_BYTES", "2000000"))
+    if path.stat().st_size > max_bytes:
+        raise ValueError(f"Store list file exceeds the {max_bytes}-byte limit")
+    if path.suffix.lower() not in {".txt", ".csv", ".tsv"}:
+        raise ValueError("Store list file must be .txt, .csv, or .tsv")
+    return path
+
+
+def _delivery_assignments(params: dict, workspace_dir: str | None) -> tuple[dict, list[str]]:
+    """Matthew's text/file, parsed in Python - never retyped or reinterpreted
+    by a model. Exactly one of raw_list/file_path is expected."""
+    raw_list = params.get("raw_list")
+    file_path = params.get("file_path")
+    if not raw_list and not file_path:
+        raise ValueError("Provide either raw_list or file_path with the store/serial list")
+    if raw_list and file_path:
+        raise ValueError("Provide either raw_list or file_path, not both")
+    if file_path:
+        path = validated_text_path(str(file_path), workspace_dir)
+        raw_list = path.read_text(encoding="utf-8")
+    parsed = deliveries.parse_store_list(str(raw_list))
+    return parsed["assignments"], parsed["warnings"]
+
+
+def _store_overrides(params: dict) -> dict[str, int] | None:
+    overrides = params.get("store_overrides")
+    if not overrides:
+        return None
+    return {str(label): int(partner_id) for label, partner_id in overrides.items()}
+
+
+def delivery_reconcile(params: dict, workspace_dir: str | None) -> dict:
+    assignments, warnings = _delivery_assignments(params, workspace_dir)
+    report = deliveries.preview_chain_delivery(assignments, _store_overrides(params))
+    return {"message": deliveries.render_report(report, warnings), "report": report}
+
+
+def delivery_fill_serials(params: dict, workspace_dir: str | None) -> dict:
+    assignments, warnings = _delivery_assignments(params, workspace_dir)
+    report = deliveries.fill_chain_delivery_serials(assignments, _store_overrides(params))
+    return {"message": deliveries.render_report(report, warnings), "report": report}
+
+
 def attach_photo(params: dict, raw_sender: Any, workspace_dir: str | None) -> dict:
     _, tech = require_tech(raw_sender)
     path = validated_media_path(str(params["file_path"]), workspace_dir)
@@ -583,6 +638,10 @@ def dispatch(operation: str, params: dict, envelope: dict) -> dict:
         return schedule_event(params, raw_sender, workspace_dir)
     if operation == "sweep":
         return sweep(params, raw_sender)
+    if operation == "delivery_reconcile":
+        return delivery_reconcile(params, workspace_dir)
+    if operation == "delivery_fill_serials":
+        return delivery_fill_serials(params, workspace_dir)
     if operation == "poll_new_tickets":
         if raw_sender:
             raise PermissionError("New-ticket polling is restricted to automations")

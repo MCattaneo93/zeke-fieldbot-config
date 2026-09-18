@@ -418,6 +418,44 @@ const entry = defineToolPlugin({
         { additionalProperties: false },
       ),
     }),
+    bridgeTool(tool, {
+      name: "fieldbot_delivery_reconcile",
+      label: "Reconcile ACME Delivery Serials",
+      description:
+        "Read-only. Compare Matthew's store/serial list against pending ACME deliveries in Odoo and report what already matches, what can be fixed, and what needs his attention. Pass his text or a file he sent verbatim - never retype or reconstruct serial numbers yourself. Writes nothing.",
+      operation: "delivery_reconcile",
+      parameters: Type.Object(
+        {
+          raw_list: Type.Optional(nullableString),
+          file_path: Type.Optional(nullableString),
+          store_overrides: Type.Optional(
+            Type.Record(Type.String(), Type.Integer(), {
+              description: "Only after an ambiguous store label was resolved with Matthew: maps his exact label text to the Odoo partner ID he confirmed.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    }),
+    bridgeTool(tool, {
+      name: "fieldbot_delivery_fill_serials",
+      label: "Fill ACME Delivery Serials",
+      description:
+        "Writes corrected serial (lot) assignments onto pending ACME delivery lines to match Matthew's store/serial list. Only touches stores whose reconciliation is unambiguous; never validates or finalizes a delivery - that stays a human step in Odoo. Pass his text or a file he sent verbatim - never retype or reconstruct serial numbers yourself.",
+      operation: "delivery_fill_serials",
+      parameters: Type.Object(
+        {
+          raw_list: Type.Optional(nullableString),
+          file_path: Type.Optional(nullableString),
+          store_overrides: Type.Optional(
+            Type.Record(Type.String(), Type.Integer(), {
+              description: "Only after an ambiguous store label was resolved with Matthew: maps his exact label text to the Odoo partner ID he confirmed.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    }),
   ],
 });
 

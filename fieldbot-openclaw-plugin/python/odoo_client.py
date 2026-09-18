@@ -31,6 +31,15 @@ WHITELIST: dict[str, set[str]] = {
     # Knowledge base: read-only. actions.py redacts credentials before any
     # text leaves the bridge; see redaction.py.
     "knowledge.article": {"search_read"},
+    # ACME store delivery reconciliation (deliveries.py). NO "button_validate"
+    # anywhere below - that omission is the entire safety property of this
+    # feature. A human always finalizes a delivery in Odoo; do not add it.
+    "stock.picking": {"search_read", "message_post"},
+    "stock.move.line": {"search_read", "write"},  # deliveries.py only ever writes {"lot_id": ...}
+    "stock.lot": {"search_read"},
+    "stock.quant": {"search_read"},
+    "sale.order": {"search_read"},  # diagnostics only: "no delivery - SO is still draft/cancelled"
+    "product.product": {"search_read"},  # display names only
 }
 
 
