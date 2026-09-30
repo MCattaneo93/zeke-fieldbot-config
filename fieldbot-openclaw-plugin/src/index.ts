@@ -420,9 +420,9 @@ const entry = defineToolPlugin({
     }),
     bridgeTool(tool, {
       name: "fieldbot_delivery_reconcile",
-      label: "Reconcile ACME Delivery Serials",
+      label: "Reconcile POS-NY Delivery Serials",
       description:
-        "Read-only. Compare Matthew's store/serial list against pending ACME deliveries in Odoo and report what already matches, what can be fixed, and what needs his attention. Pass his text or a file he sent verbatim - never retype or reconstruct serial numbers yourself. Writes nothing.",
+        "Read-only. Compare Matthew's store/serial list against pending deliveries for any POS-NY multi-location customer (not just one chain) in Odoo and report what already matches, what can be fixed, and what needs his attention. Pass his text or a file he sent verbatim - never retype or reconstruct serial numbers yourself. Writes nothing.",
       operation: "delivery_reconcile",
       parameters: Type.Object(
         {
@@ -439,9 +439,9 @@ const entry = defineToolPlugin({
     }),
     bridgeTool(tool, {
       name: "fieldbot_delivery_fill_serials",
-      label: "Fill ACME Delivery Serials",
+      label: "Fill POS-NY Delivery Serials",
       description:
-        "Writes corrected serial (lot) assignments onto pending ACME delivery lines to match Matthew's store/serial list. Only touches stores whose reconciliation is unambiguous; never validates or finalizes a delivery - that stays a human step in Odoo. Pass his text or a file he sent verbatim - never retype or reconstruct serial numbers yourself.",
+        "Writes corrected serial (lot) assignments onto pending delivery lines for any POS-NY multi-location customer to match Matthew's store/serial list. Only touches stores whose reconciliation is unambiguous; never validates or finalizes a delivery - that stays a human step in Odoo. Pass his text or a file he sent verbatim - never retype or reconstruct serial numbers yourself.",
       operation: "delivery_fill_serials",
       parameters: Type.Object(
         {
@@ -452,6 +452,42 @@ const entry = defineToolPlugin({
               description: "Only after an ambiguous store label was resolved with Matthew: maps his exact label text to the Odoo partner ID he confirmed.",
             }),
           ),
+        },
+        { additionalProperties: false },
+      ),
+    }),
+    bridgeTool(tool, {
+      name: "fieldbot_receiving_reconcile",
+      label: "Reconcile Receiving Serials",
+      description:
+        "Read-only. Given serials from a vendor delivery slip (pasted, or extracted from a photo/PDF) and a PO reference and/or vendor name, finds the matching open purchase-order receipt in Odoo and reports whether it's ready to fill, needs a product to be specified, isn't confirmed yet (no receipt exists), or is ambiguous. Pass the serial text verbatim - never retype or reconstruct serial numbers yourself. Writes nothing.",
+      operation: "receiving_reconcile",
+      parameters: Type.Object(
+        {
+          raw_list: Type.Optional(nullableString),
+          file_path: Type.Optional(nullableString),
+          po_reference: Type.Optional(nullableString),
+          vendor_name: Type.Optional(nullableString),
+          product_hint: Type.Optional(nullableString),
+          picking_override: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+        },
+        { additionalProperties: false },
+      ),
+    }),
+    bridgeTool(tool, {
+      name: "fieldbot_receiving_fill_serials",
+      label: "Fill Receiving Serials",
+      description:
+        "Writes serials from a vendor delivery slip onto the still-open lines of a confirmed purchase order's receipt in Odoo (a brand-new serial, so this only ever sets lot_name, never creating inventory or a lot record). Never confirms a purchase order and never validates a receipt - both stay a human's call. Refuses to write if the receipt is ambiguous, the PO isn't confirmed, more serials were given than open lines, or a serial is already on record elsewhere. Pass the serial text verbatim - never retype or reconstruct serial numbers yourself.",
+      operation: "receiving_fill_serials",
+      parameters: Type.Object(
+        {
+          raw_list: Type.Optional(nullableString),
+          file_path: Type.Optional(nullableString),
+          po_reference: Type.Optional(nullableString),
+          vendor_name: Type.Optional(nullableString),
+          product_hint: Type.Optional(nullableString),
+          picking_override: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
         },
         { additionalProperties: false },
       ),

@@ -31,14 +31,26 @@ WHITELIST: dict[str, set[str]] = {
     # Knowledge base: read-only. actions.py redacts credentials before any
     # text leaves the bridge; see redaction.py.
     "knowledge.article": {"search_read"},
-    # ACME store delivery reconciliation (deliveries.py). NO "button_validate"
-    # anywhere below - that omission is the entire safety property of this
-    # feature. A human always finalizes a delivery in Odoo; do not add it.
+    # POS-NY multi-location customer delivery reconciliation (deliveries.py),
+    # any customer fulfilled from the POS-NY warehouse, not one hardcoded
+    # account. NO "button_validate" anywhere below - that omission is the
+    # entire safety property of this feature. A human always finalizes a
+    # delivery in Odoo; do not add it, no matter how the scope grows.
     "stock.picking": {"search_read", "message_post"},
-    "stock.move.line": {"search_read", "write"},  # deliveries.py only ever writes {"lot_id": ...}
+    # deliveries.py writes {"lot_id": ...} (existing lot, outgoing side);
+    # receiving.py writes {"lot_name": ...} (brand-new serial, no stock.lot
+    # exists yet - lot_name is the field that lets a receipt be saved with
+    # serials on it without creating inventory or validating anything; the
+    # lot record itself is only created when a human validates the receipt).
+    "stock.move.line": {"search_read", "write"},
     "stock.lot": {"search_read"},
     "stock.quant": {"search_read"},
     "sale.order": {"search_read"},  # diagnostics only: "no delivery - SO is still draft/cancelled"
+    # receiving.py, read-only: tells "no PO by that reference/vendor" apart
+    # from "PO exists but hasn't been confirmed yet" (no receipt exists
+    # until confirmation). NO write methods - confirming a PO is a human's
+    # call, same as validating a delivery is.
+    "purchase.order": {"search_read"},
     "product.product": {"search_read"},  # display names only
 }
 

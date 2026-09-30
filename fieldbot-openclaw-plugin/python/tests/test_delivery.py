@@ -8,6 +8,7 @@ single most important property under test.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import sys
@@ -127,8 +128,14 @@ class FakeOdoo:
         raise AssertionError(f"Unexpected fake search_read model: {model}")
 
 
+@contextlib.contextmanager
 def patched(fake: FakeOdoo):
-    return patch.object(deliveries.client, "execute", side_effect=fake.execute)
+    """Patches the Odoo client AND short-circuits POS-NY partner discovery
+    straight to fake.partners - the 3-hop discovery query (move lines ->
+    pickings -> partners) is exercised in its own dedicated test instead."""
+    with patch.object(deliveries.client, "execute", side_effect=fake.execute), \
+         patch.object(deliveries, "_fetch_pos_ny_partners", return_value=fake.partners):
+        yield
 
 
 class WhitelistTests(unittest.TestCase):
@@ -205,32 +212,147 @@ class StoreResolutionTests(unittest.TestCase):
         ]
 
     def test_dash_store_number_format(self):
-        with patch.object(deliveries, "_chain_partners", return_value=self.partners):
-            result = deliveries.resolve_chain_store("Store 10")
+        with patch.object(deliveries, "_pos_ny_partners", return_value=self.partners):
+            result = deliveries.resolve_pos_ny_store("Store 10")
         self.assertEqual(result, {"status": "matched", "partner_id": 1, "name": self.partners[0]["name"]})
 
     def test_parenthetical_s_number_format(self):
-        with patch.object(deliveries, "_chain_partners", return_value=self.partners):
-            result = deliveries.resolve_chain_store("S28")
+        with patch.object(deliveries, "_pos_ny_partners", return_value=self.partners):
+            result = deliveries.resolve_pos_ny_store("S28")
         self.assertEqual(result["status"], "matched")
         self.assertEqual(result["partner_id"], 2)
 
     def test_bare_number_matches_store_number(self):
-        with patch.object(deliveries, "_chain_partners", return_value=self.partners):
-            result = deliveries.resolve_chain_store("28")
+        with patch.object(deliveries, "_pos_ny_partners", return_value=self.partners):
+            result = deliveries.resolve_pos_ny_store("28")
         self.assertEqual(result["status"], "matched")
         self.assertEqual(result["partner_id"], 2)
 
     def test_ambiguous_number_returns_candidates(self):
-        with patch.object(deliveries, "_chain_partners", return_value=self.partners):
-            result = deliveries.resolve_chain_store("Store 4")
+        with patch.object(deliveries, "_pos_ny_partners", return_value=self.partners):
+            result = deliveries.resolve_pos_ny_store("Store 4")
         self.assertEqual(result["status"], "ambiguous")
         self.assertEqual({c["partner_id"] for c in result["candidates"]}, {3, 4})
 
     def test_unmatched_query_returns_not_found(self):
-        with patch.object(deliveries, "_chain_partners", return_value=self.partners):
-            result = deliveries.resolve_chain_store("Store 999")
+        with patch.object(deliveries, "_pos_ny_partners", return_value=self.partners):
+            result = deliveries.resolve_pos_ny_store("Store 999")
         self.assertEqual(result, {"status": "not_found", "query": "Store 999"})
+
+    def test_brand_text_disambiguates_a_shared_store_number_across_chains(self):
+        """With one chain in scope a bare store number was never ambiguous
+        across brands. With several POS-NY chains discoverable, the same
+        number can belong to more than one - the brand text in the query is
+        what tells them apart, and must not be dropped just because a
+        number was also present."""
+        partners = [
+            {"id": 10, "name": "Acme Mini (Store 4)"},
+            {"id": 11, "name": "Pie Spot Fremont (S4)"},
+        ]
+        with patch.object(deliveries, "_pos_ny_partners", return_value=partners):
+            result = deliveries.resolve_pos_ny_store("Pie Spot Store 4")
+        self.assertEqual(result, {"status": "matched", "partner_id": 11, "name": "Pie Spot Fremont (S4)"})
+
+    def test_brand_text_matching_no_candidate_does_not_return_the_wrong_chain(self):
+        """The brand text doesn't match either numbered candidate here -
+        this must not silently hand back some other chain's Store 1."""
+        partners = [
+            {"id": 10, "name": "Acme Mini (Store One)"},
+            {"id": 11, "name": "Acme Express - Store 1"},
+        ]
+        with patch.object(deliveries, "_pos_ny_partners", return_value=partners):
+            result = deliveries.resolve_pos_ny_store("Pie Spot Store 1")
+        self.assertEqual(result["status"], "not_found")
+
+    def test_bare_number_without_brand_text_is_unaffected(self):
+        """A plain 'Store N' query - the common case - must resolve exactly
+        as before: no brand text means no narrowing is attempted."""
+        partners = [{"id": 10, "name": "Acme Mini (Store One)"}, {"id": 11, "name": "Acme Express - Store 1"}]
+        with patch.object(deliveries, "_pos_ny_partners", return_value=partners):
+            result = deliveries.resolve_pos_ny_store("Store 1")
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual({c["partner_id"] for c in result["candidates"]}, {10, 11})
+
+    def test_spelled_out_number_resolves_like_the_digit(self):
+        partners = self.partners + [{"id": 5, "name": "Acme Mini (Store Nineteen)"}]
+        with patch.object(deliveries, "_pos_ny_partners", return_value=partners):
+            result = deliveries.resolve_pos_ny_store("Store Nineteen")
+        self.assertEqual(result, {"status": "matched", "partner_id": 5, "name": "Acme Mini (Store Nineteen)"})
+
+    def test_spelled_out_and_digit_siblings_are_caught_as_ambiguous(self):
+        """A store that has both a 'Store Three' partner and a separate
+        'Store 3' partner is a real duplicate - querying either the word or
+        the digit form must surface both, not silently pick one."""
+        partners = self.partners + [
+            {"id": 5, "name": "Acme Mini (Store Three)"},
+            {"id": 6, "name": "Acme Express - Store 3"},
+        ]
+        with patch.object(deliveries, "_pos_ny_partners", return_value=partners):
+            by_digit = deliveries.resolve_pos_ny_store("Store 3")
+            by_word = deliveries.resolve_pos_ny_store("Store Three")
+        for result in (by_digit, by_word):
+            self.assertEqual(result["status"], "ambiguous")
+            self.assertEqual({c["partner_id"] for c in result["candidates"]}, {5, 6})
+
+
+class PosNyDiscoveryTests(unittest.TestCase):
+    """_fetch_pos_ny_partners is data-driven, not name-based: a customer
+    qualifies by having a real delivery out of the POS-NY warehouse, never
+    by matching a hardcoded brand. These pin the query shape and the
+    dedup/short-circuit behavior; the actual vendor-vs-customer split is an
+    Odoo-side domain filter (location_dest_id like 'Partners/Customers'),
+    verified against production separately, not re-simulated here."""
+
+    def setUp(self):
+        deliveries._cache.clear()
+
+    def test_query_shape_and_dedup(self):
+        move_lines = [
+            {"id": 1, "picking_id": [500, "POS.N/OUT/00500"]},
+            {"id": 2, "picking_id": [500, "POS.N/OUT/00500"]},  # same picking, dedup
+            {"id": 3, "picking_id": [600, "POS.N/OUT/00600"]},
+        ]
+        pickings = [
+            {"id": 500, "partner_id": [10, "Bay Kitchen Oakland - Southgate (S2)"]},
+            {"id": 600, "partner_id": [10, "Bay Kitchen Oakland - Southgate (S2)"]},  # same partner, dedup
+        ]
+        partners = [{"id": 10, "name": "Bay Kitchen Oakland - Southgate (S2)"}]
+        calls = []
+
+        def fake_search_read(model, domain, fields=None, **kw):
+            calls.append((model, domain))
+            if model == "stock.move.line":
+                return move_lines
+            if model == "stock.picking":
+                return pickings
+            if model == "res.partner":
+                return partners
+            raise AssertionError(f"unexpected model {model}")
+
+        with patch.object(deliveries.client, "search_read", side_effect=fake_search_read):
+            result = deliveries._fetch_pos_ny_partners()
+
+        self.assertEqual(result, partners)
+        move_line_domain = calls[0][1]
+        self.assertIn(["location_id", "like", "POS.N/"], move_line_domain)
+        self.assertIn(["location_dest_id", "like", "Partners/Customers"], move_line_domain)
+        self.assertEqual(calls[1][0], "stock.picking")
+        self.assertEqual(set(calls[1][1][0][2]), {500, 600})  # order of a set-derived list is not guaranteed
+        self.assertEqual(calls[2][0], "res.partner")
+        self.assertEqual(set(calls[2][1][0][2]), {10})
+        self.assertEqual(calls[2][1][1], ["is_company", "=", True])
+
+    def test_no_pos_ny_deliveries_short_circuits(self):
+        with patch.object(deliveries.client, "search_read", return_value=[]) as sr:
+            result = deliveries._fetch_pos_ny_partners()
+        self.assertEqual(result, [])
+        sr.assert_called_once()  # never reaches the picking/partner calls
+
+    def test_result_is_cached(self):
+        with patch.object(deliveries.client, "search_read", return_value=[]) as sr:
+            deliveries._pos_ny_partners()
+            deliveries._pos_ny_partners()
+        sr.assert_called_once()
 
 
 class ReconcileTests(unittest.TestCase):
@@ -245,7 +367,7 @@ class ReconcileTests(unittest.TestCase):
         fake.add_line(1, 500, "WH/OUT/00500", 1, "Widget A", "SN0001", "WH/Stock")
 
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN0001"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN0001"]})
 
         store = report["stores"][0]
         self.assertEqual(store["status"], "reconciled")
@@ -263,7 +385,7 @@ class ReconcileTests(unittest.TestCase):
         fake.add_line(1, 500, "WH/OUT/00500", 1, "Widget A", "SN_OLD", "WH/Stock")
 
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN_NEW"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN_NEW"]})
 
         store = report["stores"][0]
         self.assertEqual(store["per_product"][0]["status"], "fixable")
@@ -282,7 +404,7 @@ class ReconcileTests(unittest.TestCase):
         fake.add_line(1, 500, "WH/OUT/00500", 1, "Widget A", "SN1", "WH/Stock")
 
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN1", "SN2"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN1", "SN2"]})
 
         store = report["stores"][0]
         self.assertEqual(store["per_product"][0]["status"], "count_mismatch")
@@ -299,7 +421,7 @@ class ReconcileTests(unittest.TestCase):
         fake.add_line(1, 500, "WH/OUT/00500", 1, "Widget A", "SN_HELD", "WH/Stock")
 
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN_ELSEWHERE"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN_ELSEWHERE"]})
 
         store = report["stores"][0]
         all_changes = store["changes_needed"]
@@ -320,7 +442,7 @@ class ReconcileTests(unittest.TestCase):
         fake.add_line(1, 500, "WH/OUT/00500", 1, "Widget A", "SN_OLD", "WH/Stock")
 
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN_WRONG_LOC"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN_WRONG_LOC"]})
 
         store = report["stores"][0]
         self.assertEqual(store["per_product"][0]["status"], "location_mismatch")
@@ -346,7 +468,7 @@ class ReconcileTests(unittest.TestCase):
         done_fake.__dict__.update(fake.__dict__)
 
         with patched(done_fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN1"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN1"]})
 
         store = report["stores"][0]
         self.assertEqual(store["status"], "already_delivered")
@@ -369,7 +491,7 @@ class ReconcileTests(unittest.TestCase):
         })
 
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN0001"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN0001"]})
 
         store = report["stores"][0]
         products_seen = {p["product"] for p in store["per_product"]}
@@ -388,7 +510,7 @@ class ReconcileTests(unittest.TestCase):
         fake.sale_orders[1] = [{"id": 55, "state": "draft"}]
 
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 10": ["SN1"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 10": ["SN1"]})
 
         store = report["stores"][0]
         self.assertEqual(store["status"], "no_delivery")
@@ -398,7 +520,7 @@ class ReconcileTests(unittest.TestCase):
         fake = FakeOdoo()
         fake.partners = []
         with patched(fake):
-            report = deliveries.preview_chain_delivery({"Store 999": ["SN1"]})
+            report = deliveries.preview_pos_ny_delivery({"Store 999": ["SN1"]})
         store = report["stores"][0]
         self.assertEqual(store["resolution"]["status"], "not_found")
 
@@ -429,7 +551,7 @@ class FillTests(unittest.TestCase):
         assignments = {"Store 10": ["SN_A"], "Store 11": ["SN_B"]}
 
         with patched(fake):
-            report = deliveries.fill_chain_delivery_serials(assignments)
+            report = deliveries.fill_pos_ny_delivery_serials(assignments)
 
         write_calls = [c for c in fake.calls if c[0] == "stock.move.line" and c[1] == "write"]
         self.assertEqual(len(write_calls), 4)  # 2 releases + 2 assigns
@@ -449,7 +571,7 @@ class FillTests(unittest.TestCase):
     def test_payload_is_only_lot_id(self):
         fake = self._cross_store_fixture()
         with patched(fake):
-            deliveries.fill_chain_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
+            deliveries.fill_pos_ny_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
         for call in fake.calls:
             if call[0] == "stock.move.line" and call[1] == "write":
                 self.assertEqual(set(call[2][1].keys()), {"lot_id"})
@@ -463,7 +585,7 @@ class FillTests(unittest.TestCase):
         fake.add_line(1, 500, "WH/OUT/00500", 1, "Widget A", "SN1", "WH/Stock")
 
         with patched(fake):
-            report = deliveries.fill_chain_delivery_serials({"Store 10": ["SN1", "SN2"]})
+            report = deliveries.fill_pos_ny_delivery_serials({"Store 10": ["SN1", "SN2"]})
 
         self.assertEqual(len([c for c in fake.calls if c[1] == "write"]), 0)
         self.assertEqual(report["stores"][0].get("status"), "reconciled")
@@ -471,7 +593,7 @@ class FillTests(unittest.TestCase):
     def test_journal_is_written_before_any_write_call(self):
         fake = self._cross_store_fixture()
         with patched(fake):
-            deliveries.fill_chain_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
+            deliveries.fill_pos_ny_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
         journal_text = deliveries._JOURNAL_PATH.read_text(encoding="utf-8")
         self.assertIn("SN_A", journal_text)
         self.assertIn("SN_B", journal_text)
@@ -479,7 +601,7 @@ class FillTests(unittest.TestCase):
     def test_one_note_per_touched_picking(self):
         fake = self._cross_store_fixture()
         with patched(fake):
-            deliveries.fill_chain_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
+            deliveries.fill_pos_ny_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
         self.assertEqual(len(fake.notes), 2)
         picking_ids = {n[0] for n in fake.notes}
         self.assertEqual(picking_ids, {500, 600})
@@ -488,10 +610,10 @@ class FillTests(unittest.TestCase):
         fake = self._cross_store_fixture()
         assignments = {"Store 10": ["SN_A"], "Store 11": ["SN_B"]}
         with patched(fake):
-            deliveries.fill_chain_delivery_serials(assignments)
+            deliveries.fill_pos_ny_delivery_serials(assignments)
             fake.notes.clear()
             journal_len_before = len(deliveries._JOURNAL_PATH.read_text(encoding="utf-8").splitlines())
-            second = deliveries.fill_chain_delivery_serials(assignments)
+            second = deliveries.fill_pos_ny_delivery_serials(assignments)
         self.assertEqual(fake.notes, [])
         journal_len_after = len(deliveries._JOURNAL_PATH.read_text(encoding="utf-8").splitlines())
         self.assertEqual(journal_len_before, journal_len_after)
@@ -511,7 +633,7 @@ class FillTests(unittest.TestCase):
         flaky.__dict__.update(fake.__dict__)
 
         with patched(flaky):
-            report = deliveries.fill_chain_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
+            report = deliveries.fill_pos_ny_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
 
         failures = [
             c for store in report["stores"]
@@ -523,14 +645,14 @@ class FillTests(unittest.TestCase):
     def test_button_validate_never_attempted(self):
         fake = self._cross_store_fixture()
         with patched(fake):
-            deliveries.fill_chain_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
+            deliveries.fill_pos_ny_delivery_serials({"Store 10": ["SN_A"], "Store 11": ["SN_B"]})
         self.assertFalse(any(call[1] == "button_validate" for call in fake.calls))
 
 
 class DispatchTests(unittest.TestCase):
     def test_dispatch_routes_reconcile_and_fill(self):
-        with patch.object(bridge.deliveries, "preview_chain_delivery", return_value={"stores": []}) as preview, \
-             patch.object(bridge.deliveries, "fill_chain_delivery_serials", return_value={"stores": []}) as fill, \
+        with patch.object(bridge.deliveries, "preview_pos_ny_delivery", return_value={"stores": []}) as preview, \
+             patch.object(bridge.deliveries, "fill_pos_ny_delivery_serials", return_value={"stores": []}) as fill, \
              patch.object(bridge.deliveries, "parse_store_list",
                           return_value={"assignments": {"Store 1": ["SN1"]}, "warnings": []}):
             out = bridge.dispatch("delivery_reconcile", {"raw_list": "Store 1: SN1"}, {})

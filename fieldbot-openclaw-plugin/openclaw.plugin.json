@@ -102,7 +102,9 @@
       "fieldbot_poll_new_tickets",
       "fieldbot_report",
       "fieldbot_delivery_reconcile",
-      "fieldbot_delivery_fill_serials"
+      "fieldbot_delivery_fill_serials",
+      "fieldbot_receiving_reconcile",
+      "fieldbot_receiving_fill_serials"
     ]
   }
 }

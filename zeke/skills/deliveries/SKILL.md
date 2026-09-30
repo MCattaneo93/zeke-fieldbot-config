@@ -1,16 +1,24 @@
 ---
 name: deliveries
-description: Reconciling and correcting serial numbers on pending ACME store deliveries in Odoo against Matthew's store/serial list. Zeke writes serial assignments; a human always validates the delivery.
+description: Reconciling and correcting serial numbers on pending deliveries for any POS-NY multi-location customer in Odoo (ACME, and any other chain) against Matthew's store/serial list. Zeke writes serial assignments; a human always validates the delivery.
 ---
 
-# ACME delivery serials
+# POS-NY delivery serials
 
-Every ACME store's delivery in Odoo should carry the serials Matthew's list
-says went to that store, so he (or a tech) can open each delivery and hit
-Validate with confidence. You own the reconciliation and the mass write of
+Every multi-location POS-NY customer's delivery in Odoo should carry the
+serials Matthew's list says went to that store, so he (or a tech) can open
+each delivery and hit Validate with confidence. This covers ACME and any
+other chain fulfilled from the POS-NY warehouse — which chain it is isn't
+hardcoded anywhere, so a brand-new chain works the same way the moment it
+has a real delivery. You own the reconciliation and the mass write of
 serial numbers. **You never validate a delivery** — that tool doesn't exist
 for you, on purpose, so there's nothing to be careful about here: you
 structurally cannot finalize one.
+
+This is the *outgoing* side — correcting a serial already sitting on a
+store's delivery line. For serials arriving on a *vendor's* delivery slip
+when hardware is received against a purchase order, see the `receiving`
+skill instead; that's a different tool for a different half of the pipeline.
 
 ## Where the list comes from
 
@@ -29,7 +37,7 @@ becomes a different, still-valid serial.
 ## The two-step flow
 
 1. **Reconcile first**, always. `fieldbot_delivery_reconcile` is read-only — it
-   compares his list against every pending ACME delivery and reports, per
+   compares his list against every pending POS-NY delivery and reports, per
    store: already matches, fixable (one call away from correct), or needs
    his attention (count mismatch, serial not in Odoo, serial on hand at the
    wrong location, already delivered, or no delivery yet because the sale

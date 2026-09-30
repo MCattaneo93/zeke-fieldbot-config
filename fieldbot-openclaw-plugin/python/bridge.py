@@ -18,6 +18,7 @@ import actions
 import config
 import deliveries
 import ics_util
+import receiving
 import reports
 import state
 import voice
@@ -457,14 +458,53 @@ def _store_overrides(params: dict) -> dict[str, int] | None:
 
 def delivery_reconcile(params: dict, workspace_dir: str | None) -> dict:
     assignments, warnings = _delivery_assignments(params, workspace_dir)
-    report = deliveries.preview_chain_delivery(assignments, _store_overrides(params))
+    report = deliveries.preview_pos_ny_delivery(assignments, _store_overrides(params))
     return {"message": deliveries.render_report(report, warnings), "report": report}
 
 
 def delivery_fill_serials(params: dict, workspace_dir: str | None) -> dict:
     assignments, warnings = _delivery_assignments(params, workspace_dir)
-    report = deliveries.fill_chain_delivery_serials(assignments, _store_overrides(params))
+    report = deliveries.fill_pos_ny_delivery_serials(assignments, _store_overrides(params))
     return {"message": deliveries.render_report(report, warnings), "report": report}
+
+
+def _receiving_raw_text(params: dict, workspace_dir: str | None) -> str:
+    """The vendor's serial list, as Matthew pasted it or sent it as a file -
+    never retyped or reinterpreted before it reaches receiving.py's parser."""
+    raw_list = params.get("raw_list")
+    file_path = params.get("file_path")
+    if not raw_list and not file_path:
+        raise ValueError("Provide either raw_list or file_path with the vendor's serial list")
+    if raw_list and file_path:
+        raise ValueError("Provide either raw_list or file_path, not both")
+    if file_path:
+        path = validated_text_path(str(file_path), workspace_dir)
+        raw_list = path.read_text(encoding="utf-8")
+    return str(raw_list)
+
+
+def receiving_reconcile(params: dict, workspace_dir: str | None) -> dict:
+    raw_serials = _receiving_raw_text(params, workspace_dir)
+    report = receiving.preview_receiving(
+        raw_serials,
+        params.get("po_reference"),
+        params.get("vendor_name"),
+        params.get("product_hint"),
+        int(params["picking_override"]) if params.get("picking_override") else None,
+    )
+    return {"message": receiving.render_report(report), "report": report}
+
+
+def receiving_fill_serials(params: dict, workspace_dir: str | None) -> dict:
+    raw_serials = _receiving_raw_text(params, workspace_dir)
+    report = receiving.fill_receiving_serials(
+        raw_serials,
+        params.get("po_reference"),
+        params.get("vendor_name"),
+        params.get("product_hint"),
+        int(params["picking_override"]) if params.get("picking_override") else None,
+    )
+    return {"message": receiving.render_report(report), "report": report}
 
 
 def attach_photo(params: dict, raw_sender: Any, workspace_dir: str | None) -> dict:
@@ -642,6 +682,10 @@ def dispatch(operation: str, params: dict, envelope: dict) -> dict:
         return delivery_reconcile(params, workspace_dir)
     if operation == "delivery_fill_serials":
         return delivery_fill_serials(params, workspace_dir)
+    if operation == "receiving_reconcile":
+        return receiving_reconcile(params, workspace_dir)
+    if operation == "receiving_fill_serials":
+        return receiving_fill_serials(params, workspace_dir)
     if operation == "poll_new_tickets":
         if raw_sender:
             raise PermissionError("New-ticket polling is restricted to automations")

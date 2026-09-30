@@ -1,6 +1,12 @@
-"""ACME store delivery reconciliation and serial write-in.
+"""POS-NY multi-location customer delivery reconciliation and serial write-in.
 
-Odoo already auto-reserves *a* serial on every pending ACME delivery line via
+Originally built for ACME alone; generalized to any customer fulfilled from
+the POS-NY warehouse (location prefix "POS.N") with multiple named store
+locations - Bay Kitchen, Pie Spot, and whichever chain comes next, without
+hardcoding a customer name anywhere. "POS-NY customer" is derived from real
+delivery data (see `_pos_ny_partners`), never from a name filter.
+
+Odoo already auto-reserves *a* serial on every pending delivery line via
 FIFO at order-confirmation time. The gap this module closes is verifying that
 reservation actually matches the serial Matthew's own external list says
 should ship to each store, and correcting it when it doesn't - never the
@@ -25,7 +31,7 @@ from odoo_client import client
 
 log = logging.getLogger(__name__)
 
-# ---- in-memory cache of ACME partners (mirrors actions._cached's 6h TTL) ---
+# ---- in-memory cache of POS-NY customer partners (mirrors actions._cached's 6h TTL) ---
 _CACHE_TTL = 6 * 3600
 _cache: dict[str, tuple[float, object]] = {}
 
@@ -43,10 +49,25 @@ def _cached(key: str, fetch):
 #   "Acme Retail Bell - Store 10"
 #   "Acme Retail Arlington LLC - TX (S28)"
 #   "Acme Mini (Store 4)"
+#   "Acme Mini (Store One)"        <- some partners spell the number out, and
+#                                     a sibling partner can use the digit form
+#                                     for the SAME number ("Store 3" vs
+#                                     "Store Three") - both must resolve to
+#                                     the same number or an ambiguity between
+#                                     them is silently missed.
 # There is no structured store-number field anywhere on res.partner (checked
 # ref, barcode, every x_studio_* field - all empty) - the number only exists
 # as free text inside the name, in whichever of these forms someone typed it.
 _STORE_NUMBER_RE = re.compile(r"(?:\bstore\s*|\(\s*s)\s*0*(\d+)\b", re.IGNORECASE)
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+_STORE_NUMBER_WORD_RE = re.compile(
+    r"\bstore\s+(" + "|".join(_NUMBER_WORDS) + r")\b", re.IGNORECASE
+)
 _SERIAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-]{4,}")
 
 
@@ -56,26 +77,64 @@ def _normalize(text: str) -> str:
 
 def _store_number(name: str) -> str | None:
     m = _STORE_NUMBER_RE.search(name or "")
-    return str(int(m.group(1))) if m else None
+    if m:
+        return str(int(m.group(1)))
+    m = _STORE_NUMBER_WORD_RE.search(name or "")
+    return str(_NUMBER_WORDS[m.group(1).lower()]) if m else None
 
 
-def _chain_partners() -> list[dict]:
-    """The ~43 ACME store partners, 6h-cached. `ilike 'acme'` is the same
-    naming-convention heuristic that produced the confirmed set during
-    research - not a structured flag, since none exists."""
-    return _cached(
-        "chain_partners",
-        lambda: client.search_read(
-            "res.partner",
-            [["is_company", "=", True], ["name", "ilike", "acme"]],
-            ["id", "name"],
-        ),
+def _brand_fragment(text: str) -> str:
+    """Whatever is left of a query after the "Store N"/"(SN)"/spelled-out
+    phrase is stripped out - e.g. "Pie Spot Store 1" -> "pie spot".
+
+    With a single chain in scope, a bare store number was never ambiguous
+    across brands. Now that multiple POS-NY chains can share a store
+    number, this leftover text is the only signal telling "Pie Spot
+    Store 1" apart from an unrelated chain's own "Store 1" - it must never
+    be silently dropped just because a number was also present.
+    """
+    stripped = _STORE_NUMBER_RE.sub(" ", text or "")
+    stripped = _STORE_NUMBER_WORD_RE.sub(" ", stripped)
+    return _normalize(stripped)
+
+
+def _pos_ny_partners() -> list[dict]:
+    """Every company partner with at least one delivery fulfilled from the
+    POS-NY warehouse, 6h-cached.
+
+    Data-driven, not name-based: a "POS-NY customer" is whoever has a real
+    stock.move.line whose source is under POS-NY ("POS.N/...") and whose
+    destination is a customer location ("Partners/Customers...") - not a
+    vendor receipt into that same warehouse (Amazon, Ingram, Touch Dynamic
+    and similar vendors ship stock IN to POS.N too; the destination check is
+    what excludes them). This naturally covers every multi-location chain
+    that ships from POS-NY - ACME, Bay Kitchen, Pie Spot, and whatever's
+    onboarded next - with no customer name ever hardcoded here.
+    """
+    return _cached("pos_ny_partners", _fetch_pos_ny_partners)
+
+
+def _fetch_pos_ny_partners() -> list[dict]:
+    lines = client.search_read(
+        "stock.move.line",
+        [["location_id", "like", "POS.N/"], ["location_dest_id", "like", "Partners/Customers"]],
+        ["picking_id"],
+    )
+    picking_ids = list({l["picking_id"][0] for l in lines if l.get("picking_id")})
+    if not picking_ids:
+        return []
+    pickings = client.search_read("stock.picking", [["id", "in", picking_ids]], ["partner_id"])
+    partner_ids = list({p["partner_id"][0] for p in pickings if p.get("partner_id")})
+    if not partner_ids:
+        return []
+    return client.search_read(
+        "res.partner", [["id", "in", partner_ids], ["is_company", "=", True]], ["id", "name"]
     )
 
 
-def resolve_chain_store(store_query: str) -> dict:
+def resolve_pos_ny_store(store_query: str) -> dict:
     """Resolve a store label (a bare number, "Store 12", "(S28)", or a name
-    fragment) to exactly one ACME partner.
+    fragment) to exactly one POS-NY customer partner.
 
     Returns exactly one of:
       {"status": "matched", "partner_id": int, "name": str}
@@ -83,15 +142,27 @@ def resolve_chain_store(store_query: str) -> dict:
       {"status": "not_found", "query": str}
     Never guesses when more than one partner could plausibly match.
     """
-    partners = _chain_partners()
+    partners = _pos_ny_partners()
     q = _normalize(store_query)
-    q_number = _store_number(store_query)
+    regex_number = _store_number(store_query)
+    q_number = regex_number
     if q_number is None and store_query.strip().isdigit():
         q_number = str(int(store_query.strip()))
 
     by_number = [p for p in partners if q_number is not None and _store_number(p["name"]) == q_number]
     by_name = [p for p in partners if q and q in _normalize(p["name"])]
     hits = by_number or by_name
+
+    # A number came from an actual "Store N"/"(SN)" phrase (not a bare
+    # digit), so whatever text surrounds it is real signal, not noise.
+    # Narrow the number match with it; if nothing among the number matches
+    # carries that text, don't hand back an unrelated chain's numbering -
+    # fall through to a plain name search instead.
+    if by_number and regex_number is not None:
+        brand = _brand_fragment(store_query)
+        if brand:
+            narrowed = [p for p in by_number if brand in _normalize(p["name"])]
+            hits = narrowed if narrowed else by_name
 
     if len(hits) == 1:
         return {"status": "matched", "partner_id": hits[0]["id"], "name": hits[0]["name"]}
@@ -267,7 +338,7 @@ def _reconcile_store(store_label: str, expected_serials: list[str], overrides: d
             return {"query": store_label, "resolution": {"status": "not_found", "query": store_label}}
         resolved = {"status": "matched", "partner_id": matches[0]["id"], "name": matches[0]["name"]}
     else:
-        resolved = resolve_chain_store(store_label)
+        resolved = resolve_pos_ny_store(store_label)
     if resolved["status"] != "matched":
         return {"query": store_label, "resolution": resolved}
 
@@ -412,13 +483,13 @@ def _reconcile_store(store_label: str, expected_serials: list[str], overrides: d
     }
 
 
-def preview_chain_delivery(assignments: dict, store_overrides: dict[str, int] | None = None) -> dict:
+def preview_pos_ny_delivery(assignments: dict, store_overrides: dict[str, int] | None = None) -> dict:
     """Read-only reconciliation across every store in one pasted list.
 
     Provably cannot write anything: every model this touches is whitelisted
     for search_read only (odoo_client.WHITELIST) except stock.move.line and
     stock.picking, and this function never calls their write/message_post
-    methods - only fill_chain_delivery_serials does.
+    methods - only fill_pos_ny_delivery_serials does.
     """
     return {
         "stores": [
@@ -430,7 +501,7 @@ def preview_chain_delivery(assignments: dict, store_overrides: dict[str, int] | 
 
 # ---- the write: fill in corrected serials ----------------------------------
 
-_JOURNAL_PATH = config.STATE_DIR / "delivery_serial_journal.jsonl"
+_JOURNAL_PATH = config.STATE_DIR / "pos_ny_serial_journal.jsonl"
 
 
 def _append_journal(entries: list[dict]) -> None:
@@ -440,7 +511,7 @@ def _append_journal(entries: list[dict]) -> None:
             f.write(json.dumps({**entry, "ts": time.time()}) + "\n")
 
 
-def fill_chain_delivery_serials(assignments: dict, store_overrides: dict[str, int] | None = None) -> dict:
+def fill_pos_ny_delivery_serials(assignments: dict, store_overrides: dict[str, int] | None = None) -> dict:
     """Write corrected lot_id assignments for every store whose
     reconciliation came back unambiguous ("fixable" changes_needed).
 
@@ -456,7 +527,7 @@ def fill_chain_delivery_serials(assignments: dict, store_overrides: dict[str, in
     between the two phases, re-running is safe: an empty line just gets
     filled again.
     """
-    report = preview_chain_delivery(assignments, store_overrides)
+    report = preview_pos_ny_delivery(assignments, store_overrides)
 
     all_changes = []
     for store_result in report["stores"]:
@@ -526,7 +597,7 @@ def render_report(report: dict, warnings: list[str] | None = None) -> str:
                 names = ", ".join(c["name"] for c in res["candidates"])
                 lines.append(f"  Ambiguous - could be: {names}. Tell me which one.")
             else:
-                lines.append("  No ACME store matches that.")
+                lines.append("  No POS-NY customer store matches that.")
             lines.append("")
             continue
 
