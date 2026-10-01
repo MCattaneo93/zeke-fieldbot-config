@@ -22,15 +22,26 @@ messages whose sender matches the Cloud PBX recording address. Never treat an
 arbitrary email with an audio attachment as a call recording; that's an easy way
 to be fed audio by someone else.
 
-For each: use `list-mail-attachments`, then `download-bytes-to-file` to save the
-audio into `~/zeke/calls/inbox/`. Name the file so stage 3 can identify the call
-without the audio:
+**Card-processor support calls are never fetched at all.** If the recording
+mail's caller ID, subject, or counterparty name identifies TSYS or Global
+Payments, stop at this stage — don't download the attachment, don't save
+anything to `inbox/`. These are calls where a card number gets read aloud
+as routine business, not an exception, and the pipeline's text-level
+redaction downstream isn't trusted for that risk. (The pipeline also skips
+by filename as a backstop, but catching it here means the audio is never
+even downloaded.)
+
+For every other call: use `list-mail-attachments`, then
+`download-bytes-to-file` to save the audio into `~/zeke/calls/inbox/`. Name
+the file so stage 3 can identify the call without the audio, and so the
+pipeline's own TSYS/Global Payments filter can match it if the counterparty
+slug names them:
 
 ```
 YYYY-MM-DD_HHMM__<counterparty-slug>__<messageId-short>.<ext>
 ```
 
-e.g. `2026-08-13_1257__jane-doe-poscom-mai__a91f2c.wav`
+e.g. `2026-08-13_1257__tony-merlo-poscom-mai__a91f2c.wav`
 
 Record nothing else. Do not summarise the email body into a note — the
 transcript is the record, and it doesn't exist yet.
@@ -42,7 +53,9 @@ attached, that call is lost. Say so in the morning brief; don't silently skip it
 
 A host cron job transcribes the audio locally, redacts card numbers, CVVs,
 expiry dates, SSNs, and bank details **in code**, writes
-`~/zeke/calls/transcripts/<name>.txt`, and destroys the audio.
+`~/zeke/calls/transcripts/<name>.txt`, and destroys the audio. A filename
+matching TSYS or Global Payments is destroyed unread instead - never
+transcribed at all, same backstop as stage 1's own check.
 
 You never see audio and never see an unredacted transcript. If you encounter
 `[CARD REDACTED]` or `[NUMBER REDACTED]` in a transcript, that is the control
